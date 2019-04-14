@@ -11,7 +11,7 @@ public:
 	Scheduler() = default;
 	~Scheduler() = default;
 
-	Scheduler(unsigned nproc) : nproc_(nproc) {}
+	Scheduler(unsigned nproc) : sched_proc_(nproc) {}
 
 	void Schedule() {
 		// DelayedScheduler concept
@@ -27,6 +27,15 @@ private:
 	 * }
 	 */
 
+	class SchedProc_ {
+	public:
+		SchedProc_(unsigned int nproc) : nproc_(nproc) {}
+	private:
+		xxx // free proc list
+		unsigned int nproc_;// free proc number
+
+	} sched_proc_;
+
 
 
 
@@ -37,6 +46,10 @@ private:
 	// global cgo_queue_; vector<cppcoro::task<>> something like that
 	// we need a queue for each nproc, think about what data structure to use
 
+};
+
+class Proc {
+	// we are gonna have an array of Procs in Scheduler 
 };
 
 }
