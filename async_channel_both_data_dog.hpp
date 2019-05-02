@@ -59,76 +59,90 @@ template<typename T>
 class SendWaitQueue {
 	// recv need to co_await this
 public:	
-	SendWaitQueue(AsyncChannel<T>& host_chan) : host_chan_(host_chan), wait_list_(0) {}
+	friend class DataDog;
 
-	bool await_ready() const noexcept {
-		// judge if queue has something
-		// TODO: LOCK()
-		//cppcoro::async_mutex_lock lock = co_await host_chan_.get_async_mutex().scoped_lock_async();	
-		std::cout << "[INFO-await_ready:reciever] 1\n"; 
+	template<typename T_>
+	class DataDog {
+	public:
+		DataDog(SendWaitQueue<T_>& host_queue) :
+			host_queue_(host_queue), resume_one_(false) {}
 
-		std::scoped_lock<std::mutex> lock(host_chan_.get_mutex());
-		if (host_chan_.has_pending_data()) {
-			host_chan_.dec_pending_data();
-			
-			if (host_chan_.need_append())
-				host_chan_.inc_starving_data();
+		bool await_ready() noexcept {
+			std::cout << "[INFO-await_ready:reciever] 1\n"; 
 
-			std::cout << "[INFO-await_ready:reciever] true\n"; 
-			return true;
-		}
+			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
+			if (host_queue_.host_chan_.has_pending_data()) {
+				host_queue_.host_chan_.dec_pending_data();
+				
+				if (host_queue_.host_chan_.need_append())
+					host_queue_.host_chan_.inc_starving_data();
 
-		host_chan_.inc_starving_data();
-		std::cout << "[INFO-await_ready:reciever] false\n"; 
-		// add recv into wait_queue(just change starve_cnt_ here)
-		return false;
-	}
-
-	bool await_suspend(std::experimental::coroutine_handle<> awaiter) noexcept {
-		// TODO : LOCK()
-		std::scoped_lock<std::mutex> lock(host_chan_.get_mutex());
-		// add recv into wait_queue
-		host_chan_.recv_wait_queue_.push_waiter(QueueItem<T>(awaiter));		
-		return true;
-	}
-
-	T await_resume() noexcept {
-		// TODO: LOCK() and UNLOCK() to avoid DEADLOCK!!!
-		T ret;
-		std::unique_lock<std::mutex> lck(host_chan_.get_mutex());
-		std::cout << "[INFO-await_resume:reciever] 1\n"; 
-		while (true) {
-			// because of non-continuous lock, we have to loop here to make sure we get the data.
-			// LOCK()
-			if (host_chan_.empty()) {
-				// wait on event
-				host_chan_.get_cv_empty().wait(lck);
-				continue;
+				std::cout << "[INFO-await_ready:reciever] true\n"; 
+				resume_one_ = true;
+				return true;
 			}
-			ret = std::move(host_chan_.front());
-			host_chan_.pop();
-			break;
+
+			host_queue_.host_chan_.inc_starving_data();
+			std::cout << "[INFO-await_ready:reciever] false\n"; 
+			// add recv into wait_queue(just change starve_cnt_ here)
+			resume_one_ = false;
+			return false;
 		}
-		std::cout << "[INFO-await_resume:reciever] 2\n"; 
-
-		if (!wait_list_.empty() && host_chan_.has_starving_data()) {
-		//if (host_chan_.pending_data_size() - wait_list_.size() < host_chan_.capacity()) {
-			// 1. push (useless)
-			//host_chan_.push_back(*(wait_list_.front().data));
-
-			// 2. add into pool
-			cppcoro::static_thread_pool::schedule_operation resume_coroutine(host_chan_.thread_pool_, wait_list_.front().awaiter);
-			host_chan_.thread_pool_->schedule_impl(&resume_coroutine); // bug? what if schedule_operation out of bound
-	
-			wait_list_.pop_front();
-			// final version : only setting it runnable is enough
+		void await_suspend(std::experimental::coroutine_handle<> awaiter) noexcept {
+			// TODO : LOCK()
+			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
+			std::cout << "[INFO-await_suspend:reciever] 1\n"; 
+			// add recv into wait_queue
+			host_queue_.host_chan_.recv_wait_queue_.push_waiter(QueueItem<T_>(awaiter));		
+			//return true;
 		}
 
-		std::cout << "[INFO-await_resume:reciever] 3\n"; 
-		lck.unlock();
-		host_chan_.get_cv_full().notify_one();
-		return ret;
+		T_ await_resume() noexcept {
+			std::cout << "[INFO-await_resume:reciever] 0\n"; 
+			T_ ret;
+			std::unique_lock<std::mutex> lck(host_queue_.host_chan_.get_mutex());
+			std::cout << "[INFO-await_resume:reciever] 1\n"; 
+			while (true) {
+				// LOCK()
+				if (host_queue_.host_chan_.empty()) {
+					// wait on event
+					std::cout << "[INFO-await_resume:reciever] 1.3\n"; 
+					host_queue_.host_chan_.get_cv_empty().wait(lck);
+					std::cout << "[INFO-await_resume:reciever] 1.6\n"; 
+					continue;
+				}
+				std::cout << "[INFO-await_resume:reciever] 1.9\n"; 
+				ret = std::move(host_queue_.host_chan_.front());
+				host_queue_.host_chan_.pop();
+				break;
+			}
+			std::cout << "[INFO-await_resume:reciever] 2\n"; 
+
+			if (!host_queue_.wait_list_.empty() && resume_one_) {
+				// 2. add into pool
+				cppcoro::static_thread_pool::schedule_operation resume_coroutine(host_queue_.host_chan_.thread_pool_, host_queue_.wait_list_.front().awaiter);
+				host_queue_.host_chan_.thread_pool_->schedule_impl(&resume_coroutine); // bug? what if schedule_operation out of bound
+		
+				host_queue_.wait_list_.pop_front();
+				// final version : only setting it runnable is enough
+			}
+
+			std::cout << "[INFO-await_resume:reciever] 3\n"; 
+			lck.unlock();
+			host_queue_.host_chan_.get_cv_full().notify_one();
+			return ret;
+		}
+	private:
+		SendWaitQueue<T_>& host_queue_;
+		bool resume_one_;
+	};
+
+
+	DataDog<T> GetDataDog() {
+		return DataDog<T>(*this);
 	}
+
+	SendWaitQueue(AsyncChannel<T>& host_chan) : host_chan_(host_chan), wait_list_(0) {}
 	
 	void push_waiter(QueueItem<T>&& waiter) {
 		wait_list_.push_back(std::move(waiter));
@@ -185,7 +199,7 @@ public:
 		//	std::unique_lock<std::mutex> lck(host_queue_.host_chan_.get_mutex());
 		//	cppcoro::async_mutex_lock lock = co_await host_chan_.get_async_mutex().scoped_lock_async();	
 			// add send into wait_queue
-			host_queue_.host_chan_.send_wait_queue_.push_waiter(QueueItem<T>(awaiter, data_));
+			host_queue_.host_chan_.send_wait_queue_.push_waiter(QueueItem<T_>(awaiter, data_));
 		}
 
 		void await_resume() noexcept {
@@ -462,7 +476,8 @@ private:
 	}
 
 	cppcoro::task<T> _recv() {
-		T ret = co_await send_wait_queue_;
+		T ret = co_await send_wait_queue_.GetDataDog();
+		//T ret = co_await send_wait_queue_;
 		co_return ret;
 	}
 
