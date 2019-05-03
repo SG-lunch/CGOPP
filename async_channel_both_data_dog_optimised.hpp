@@ -16,34 +16,34 @@ template<typename T>
 class AsyncChannel;
 
 template<typename T>
+class SendWaitQueue;
+
+template<typename T>
+class RecvWaitQueue;
+
+
+template<typename T>
 class QueueItem {
 public:
-	//cppcoro::static_thread_pool* thread_pool;
-	std::experimental::coroutine_handle<> awaiter;
-
 	QueueItem(){}
-	
-	QueueItem(std::experimental::coroutine_handle<> _awaiter,
-				const T& data) : awaiter(_awaiter), data_(data) {
-		// for send queue
-		//data_ = std::make_unique<T>(data);
-	}
-	
-	QueueItem(std::experimental::coroutine_handle<> _awaiter) :  
-				awaiter(_awaiter) {
-		// for recv queue
-		//data_ = std::make_unique<T>();
-	}
-	
-	void set_data(T data) {
-		data_ = data;
+
+	explicit QueueItem(typename SendWaitQueue<T>::DataDog* sender) : send_data_dog_(sender) {}
+	explicit QueueItem(typename RecvWaitQueue<T>::DataDog* receiver) : recv_data_dog_(receiver) {}
+
+	typename RecvWaitQueue<T>::DataDog* get_waiting_send_data_dog() {
+		// this is not a bug, because sender is co_awaiting on recv_queue
+		return recv_data_dog_;
 	}
 
-	T get_data() {
-		return data_;
+	typename SendWaitQueue<T>::DataDog* get_waiting_recv_data_dog() {
+		// this is not a bug, because recevier is co_awaiting on send_queue
+		return send_data_dog_;
 	}
+
 private:
 	T data_;
+	typename SendWaitQueue<T>::DataDog* send_data_dog_;
+	typename RecvWaitQueue<T>::DataDog* recv_data_dog_;
 };
 
 
@@ -53,94 +53,126 @@ class SendWaitQueue {
 public:	
 	friend class DataDog;
 
-	template<typename T_>
+	//template<typename T_>
 	class DataDog {
 	public:
-		explicit DataDog(SendWaitQueue<T_>& host_queue) :
-			host_queue_(host_queue), resume_one_(false) {}
+		explicit DataDog(SendWaitQueue<T>& host_queue) : host_queue_(host_queue){}
 
 		bool await_ready() noexcept {
-			// feel like we only need to do it in suspend, i.e., we can just return false here to get into suspend
-			/*
 			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
-			
-			if (!host_queue_.host_chan_.empty()) {
+#ifdef DEBUG_MODE
+			std::cout << "[INFO-await_ready:reciever] 1\n"; 
+#endif
+			if (!host_queue_.wait_list_.empty()) {
+				// have waiting sender
+				typename RecvWaitQueue<T>::DataDog* sender = host_queue_.wait_list_.front().get_waiting_send_data_dog();
+				data_ = sender->get_data();
+
+				sched_ops_ = std::make_unique<cppcoro::static_thread_pool::schedule_operation>(
+								host_queue_.host_chan_.thread_pool_, sender->get_awaiter());
+				//cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
+				//	host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_,
+				//			sender->get_awaiter());
+				host_queue_.host_chan_.thread_pool_->schedule_impl(sched_ops_.get()); // bug? what if schedule_operation out of bound
+		
+				host_queue_.wait_list_.pop_front();
+
+				if (!host_queue_.host_chan_.empty()) {
+					T tmp = std::move(data_);
+					data_ = host_queue_.host_chan_.front();
+					host_queue_.host_chan_.pop();
+					host_queue_.host_chan_.push_back(tmp);
+				}
+
+#ifdef DEBUG_MODE
+				std::cout << "[INFO-await_ready:reciever] not hang up\n"; 
+#endif
+				return true;
+			} else if (!host_queue_.host_chan_.empty()) {
 				// if buffer has something
 				data_ = std::move(host_queue_.host_chan_.front());
 				host_queue_.host_chan_.pop();
 
-				// if we have sender waiting for this
-				if (!host_queue_.wait_list_.empty()) {
-					cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
-						host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_,
-								host_queue_.wait_list_.front().awaiter);
-					host_queue_.host_chan_.thread_pool_->schedule_impl(resume_coroutine); // bug? what if schedule_operation out of bound
-			
-					host_queue_.wait_list_.pop_front();
-				}
 #ifdef DEBUG_MODE
-				std::cout << "[INFO-await_ready:reciever] true\n"; 
+				std::cout << "[INFO-await_ready:reciever] not hang up\n"; 
 #endif
 				return true;
-			} else {
-#ifdef DEBUG_MODE
-				std::cout << "[INFO-await_ready:reciever] false\n"; 
-#endif
-				return false;
 			}
-			*/
+
+#ifdef DEBUG_MODE
+			std::cout << "[INFO-await_ready:reciever] hangup\n"; 
+#endif
 			return false;
 		}
+
 		bool await_suspend(std::experimental::coroutine_handle<> awaiter) noexcept {
 			// TODO : LOCK()
 			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
 #ifdef DEBUG_MODE
 			std::cout << "[INFO-await_suspend:reciever] 1\n"; 
 #endif
-			// because our lock is not consecutive, so we have to check it again here.
-			if (!host_queue_.host_chan_.empty()) {
+			if (!host_queue_.wait_list_.empty()) {
+				// have waiting sender
+				typename RecvWaitQueue<T>::DataDog* sender = host_queue_.wait_list_.front().get_waiting_send_data_dog();
+				data_ = sender->get_data();
+
+				sched_ops_ = std::make_unique<cppcoro::static_thread_pool::schedule_operation>(
+								host_queue_.host_chan_.thread_pool_, sender->get_awaiter());
+				//cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
+				//	host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_,
+				//			sender->get_awaiter());
+				host_queue_.host_chan_.thread_pool_->schedule_impl(sched_ops_.get()); // bug? what if schedule_operation out of bound
+		
+				host_queue_.wait_list_.pop_front();
+
+				if (!host_queue_.host_chan_.empty()) {
+					T tmp = std::move(data_);
+					data_ = host_queue_.host_chan_.front();
+					host_queue_.host_chan_.pop();
+					host_queue_.host_chan_.push_back(tmp);
+				}
+
+#ifdef DEBUG_MODE
+				std::cout << "[INFO-await_suspend:reciever] not hang up\n"; 
+#endif
+				return false;
+			} else if (!host_queue_.host_chan_.empty()) {
 				// if buffer has something
 				data_ = std::move(host_queue_.host_chan_.front());
 				host_queue_.host_chan_.pop();
 
-				// if we have sender waiting for this
-				if (!host_queue_.wait_list_.empty()) {
-					host_queue_.host_chan_.push_back(host_queue_.wait_list_.front()->get_data());
-
-					cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
-						host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_,
-								host_queue_.wait_list_.front()->get_awaiter());
-					host_queue_.host_chan_.thread_pool_->schedule_impl(resume_coroutine); // bug? what if schedule_operation out of bound
-			
-					host_queue_.wait_list_.pop_front();
-				}
 #ifdef DEBUG_MODE
-				std::cout << "[INFO-await_suspend:reciever] not hang on\n"; 
+				std::cout << "[INFO-await_suspend:reciever] not hang up\n"; 
 #endif
 				return false;
 			} else {
 				// add recv into wait_queue
 				awaiter_ = awaiter;
-				host_queue_.host_chan_.recv_wait_queue_.push_waiter(this);		
+				host_queue_.host_chan_.recv_wait_queue_.push_waiter(QueueItem<T>(this));		
 #ifdef DEBUG_MODE
-				std::cout << "[INFO-await_suspend:reciever] hang on\n"; 
+				std::cout << "[INFO-await_suspend:reciever] hang up\n"; 
 #endif
 				return true;
 			}
 		}
 
-		T_ await_resume() noexcept {
+		T await_resume() noexcept {
 #ifdef DEBUG_MODE
 			std::cout << "[INFO-await_resume:reciever] 0\n"; 
+			
+			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
+			int waiting_sender = host_queue_.host_chan_.send_wait_queue_.get_wait_list().size();
+			int waiting_receiver = host_queue_.host_chan_.recv_wait_queue_.get_wait_list().size();
+			std::cout << "[DEBUG] (waiting_sender, waiting_receiver) = (" << waiting_sender << ", " << waiting_receiver << ")\n";
 #endif
 			return data_;
 		}
 		
-		void set_data(T_ data) {
+		void set_data(T data) {
 			data_ = data;
 		}
 
-		T_ get_data() {
+		T get_data() {
 			return data_;
 		}
 
@@ -149,31 +181,31 @@ public:
 		}
 
 	private:
-		SendWaitQueue<T_>& host_queue_;
+		SendWaitQueue<T>& host_queue_;
 		std::experimental::coroutine_handle<> awaiter_;
-		T_ data_;
-		bool resume_one_;
+		T data_;
+		std::unique_ptr<cppcoro::static_thread_pool::schedule_operation> sched_ops_;
 	};
 
 
-	DataDog<T> GetDataDog() {
-		return DataDog<T>(*this);
+	SendWaitQueue<T>::DataDog GetDataDog() {
+		return DataDog(*this);
 	}
 
 	SendWaitQueue(AsyncChannel<T>& host_chan) : host_chan_(host_chan), wait_list_(0) {}
 	
-	//void push_waiter(QueueItem<T>&& waiter) {
-	//	wait_list_.push_back(std::move(waiter));
-	//}
-	
-	void push_waiter(SendWaitQueue<T>::DataDog<T>* waiter) {
-		wait_list_.push_back(waiter);
+	void push_waiter(QueueItem<T>&& item) {
+		wait_list_.push_back(std::move(item));
 	}
+
+	std::list<QueueItem<T>>& get_wait_list() {
+		return wait_list_;
+	}
+	
 
 private:
 	AsyncChannel<T>& host_chan_;
-	//std::list<QueueItem<T>> wait_list_;
-	std::list<SendWaitQueue<T>::DataDog<T>*> wait_list_;
+	std::list<QueueItem<T>> wait_list_;
 };
 
 template<typename T>
@@ -182,54 +214,51 @@ class RecvWaitQueue {
 public:
 	friend class DataDog;
 
-	template<typename T_>
+	//template<typename T_>
 	class DataDog {
 	public:
-		DataDog(RecvWaitQueue<T_>& host_queue, T_ data) : 
-				host_queue_(host_queue), data_(data), resume_one_(false) {}
+		DataDog(RecvWaitQueue<T>& host_queue, T data) : 
+				host_queue_(host_queue), data_(data) {}
 		
 		bool await_ready() noexcept {
-			// judge if recv_wait_queue has something
-			//
-			// judge if the buffer is full or not
-			//
 			// TODO : LOCK()
-			/*
-			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
+			
 #ifdef DEBUG_MODE
 			std::cout << "[INFO-await_ready:sender] 1\n"; 
 #endif
-			if (!host_queue_.host_chan_.full()) {
-				// if buffer is full
-				host_queue_.host_chan_.push_back(data_);
-#ifdef DEBUG_MODE
-				std::cout << "[INFO-await_ready:sender] true\n"; 
-#endif
-				return true;
-			} else if (!host_queue_.wait_list_.empty()) {
-				// do we have waiters
-				host_queue_.wait_list_.front().set_data(data_);
+			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
+			
+			if (!host_queue_.wait_list_.empty()) {
+				// do we have waiters?
+				typename SendWaitQueue<T>::DataDog* receiver = host_queue_.wait_list_.front().get_waiting_recv_data_dog();	
+				receiver->set_data(data_);
 				
 				// put recv back runable
 				//
 				// TODO : pop first, put runable later
-				cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
-					host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_, 
-							host_queue_.wait_list_.front().awaiter);
-				host_queue_.host_chan_.thread_pool_->schedule_impl(resume_coroutine); // bug? what if schedule_operation out of bound
+				sched_ops_ = std::make_unique<cppcoro::static_thread_pool::schedule_operation>(
+								host_queue_.host_chan_.thread_pool_, receiver->get_awaiter());
+				//cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
+				//	host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_, 
+				//			receiver->get_awaiter());
+				host_queue_.host_chan_.thread_pool_->schedule_impl(sched_ops_.get()); // bug? what if schedule_operation out of bound
 		
 				host_queue_.wait_list_.pop_front();
 #ifdef DEBUG_MODE
-				std::cout << "[INFO-await_ready:sender] true\n"; 
+				std::cout << "[INFO-await_suspend:sender] not hang up\n"; 
 #endif
 				return true;
-			} else {
+			} else if (!host_queue_.host_chan_.full()) {
+				// if buffer is not full
+				host_queue_.host_chan_.push_back(data_);
 #ifdef DEBUG_MODE
-				std::cout << "[INFO-await_ready:sender] false\n"; 
+				std::cout << "[INFO-await_suspend:sender] not hang up\n"; 
 #endif
-				return false;
+				return true;
 			}
-			*/
+#ifdef DEBUG_MODE
+			std::cout << "[INFO-await_ready:sender] hang up\n"; 
+#endif
 			return false;
 		}
 
@@ -237,27 +266,30 @@ public:
 			// TODO : LOCK()
 			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
 			
-			if (!host_queue_.host_chan_.full()) {
-				// if buffer is not full
-				host_queue_.host_chan_.push_back(data_);
-#ifdef DEBUG_MODE
-				std::cout << "[INFO-await_suspend:sender] not hang up\n"; 
-#endif
-				return false;
-			} else if (!host_queue_.wait_list_.empty()) {
+			if (!host_queue_.wait_list_.empty()) {
 				// do we have waiters?
-				//host_queue_.wait_list_.front().set_data(data_);
-				host_queue_.wait_list_.front()->set_data(data_);
+
+				typename SendWaitQueue<T>::DataDog* receiver = host_queue_.wait_list_.front().get_waiting_recv_data_dog();	
+				receiver->set_data(data_);
 				
 				// put recv back runable
 				//
 				// TODO : pop first, put runable later
-				cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
-					host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_, 
-							host_queue_.wait_list_.front()->get_awaiter());
-				host_queue_.host_chan_.thread_pool_->schedule_impl(resume_coroutine); // bug? what if schedule_operation out of bound
+				sched_ops_ = std::make_unique<cppcoro::static_thread_pool::schedule_operation>(
+								host_queue_.host_chan_.thread_pool_, receiver->get_awaiter());
+				//cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
+				//	host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_, 
+				//			receiver->get_awaiter());
+				host_queue_.host_chan_.thread_pool_->schedule_impl(sched_ops_.get()); // bug? what if schedule_operation out of bound
 		
 				host_queue_.wait_list_.pop_front();
+#ifdef DEBUG_MODE
+				std::cout << "[INFO-await_suspend:sender] not hang up\n"; 
+#endif
+				return false;
+			} else if (!host_queue_.host_chan_.full()) {
+				// if buffer is not full
+				host_queue_.host_chan_.push_back(data_);
 #ifdef DEBUG_MODE
 				std::cout << "[INFO-await_suspend:sender] not hang up\n"; 
 #endif
@@ -265,7 +297,7 @@ public:
 			} else {
 				// add send into wait_queue
 				awaiter_ = awaiter;
-				host_queue_.host_chan_.send_wait_queue_.push_waiter(this);
+				host_queue_.host_chan_.send_wait_queue_.push_waiter(QueueItem<T>(this));
 #ifdef DEBUG_MODE
 				std::cout << "[INFO-await_suspend:sender] hang up\n"; 
 #endif
@@ -276,14 +308,19 @@ public:
 		void await_resume() noexcept {
 #ifdef DEBUG_MODE
 			std::cout << "[INFO-await_resume:sender] 1\n";
+			
+			std::scoped_lock<std::mutex> lock(host_queue_.host_chan_.get_mutex());
+			int waiting_sender = host_queue_.host_chan_.send_wait_queue_.get_wait_list().size();
+			int waiting_receiver = host_queue_.host_chan_.recv_wait_queue_.get_wait_list().size();
+			std::cout << "[DEBUG] (waiting_sender, waiting_receiver) = (" << waiting_sender << ", " << waiting_receiver << ")\n";
 #endif
 		} // Done
 
-		void set_data(T_ data) {
+		void set_data(T data) {
 			data_ = data;
 		}
 
-		T_ get_data() {
+		T get_data() {
 			return data_;
 		}
 		
@@ -292,32 +329,30 @@ public:
 		}
 
 	private:
-		RecvWaitQueue<T_>& host_queue_;
+		RecvWaitQueue<T>& host_queue_;
 		std::experimental::coroutine_handle<> awaiter_;
-		T_ data_;
-		bool resume_one_;
+		T data_;
+		std::unique_ptr<cppcoro::static_thread_pool::schedule_operation> sched_ops_;
 	};
 
 	RecvWaitQueue(AsyncChannel<T>& host_chan) : host_chan_(host_chan), wait_list_(0) {}
 
-	DataDog<T> GetDataDog(const T& data) {
-		return DataDog<T>(*this, data);
+	RecvWaitQueue<T>::DataDog GetDataDog(const T& data) {
+		return DataDog(*this, data);
 	}
 
-	/*
-	void push_waiter(QueueItem<T>&& waiter) {
-		wait_list_.push_back(std::move(waiter));
-	}
-	*/
 	
-	void push_waiter(RecvWaitQueue<T>::DataDog<T>* waiter) {
-		wait_list_.push_back(waiter);
+	void push_waiter(QueueItem<T>&& item) {
+		wait_list_.push_back(std::move(item));
 	}
+	
+	std::list<QueueItem<T>>& get_wait_list() {
+		return wait_list_;
+	}	
 
 private:
 	AsyncChannel<T>& host_chan_;
-	//std::list<QueueItem<T>> wait_list_;
-	std::list<RecvWaitQueue<T>::DataDog<T>*> wait_list_;
+	std::list<QueueItem<T>> wait_list_;
 };
 
 

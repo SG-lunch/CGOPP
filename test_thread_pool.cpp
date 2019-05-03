@@ -6,8 +6,8 @@
 
 #include <iostream>
 #include <vector>
-//#include "async_channel_both_data_dog_optimised.hpp"
-#include "async_channel_both_data_dog.hpp"
+#include "async_channel_both_data_dog_optimised.hpp"
+//#include "async_channel_both_data_dog.hpp"
 #include "measure.h"
 
 
@@ -17,8 +17,8 @@
 
 
 int main() {
-	cppcoro::static_thread_pool thread_pool{4};
-	//cppcoro::static_thread_pool thread_pool;
+	//cppcoro::static_thread_pool thread_pool{4};
+	cppcoro::static_thread_pool thread_pool;
 	AsyncChannel<int> chan(10, &thread_pool);	
 	std::mutex display_mutex;
 	const int test_iter = 1;
@@ -67,8 +67,9 @@ int main() {
 	
 	Measure m1;	
 	//for (int k = 0; k < test_iter; ++k) {
+	//	std::cout << "[ITER] " << k << " iter\n";
 		std::vector<cppcoro::task<>> tasks;
-		for (int i = 0; i < 100; ++i) {
+		for (int i = 0; i < 10000; ++i) {
 			//tasks.push_back(makeTask());
 			//tasks.push_back(MakeProducer(i));
 			//tasks.push_back(MakeConsumer(i));
