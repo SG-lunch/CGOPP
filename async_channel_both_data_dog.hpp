@@ -120,8 +120,11 @@ public:
 
 			if (!host_queue_.wait_list_.empty() && resume_one_) {
 				// 2. add into pool
-				cppcoro::static_thread_pool::schedule_operation resume_coroutine(host_queue_.host_chan_.thread_pool_, host_queue_.wait_list_.front().awaiter);
-				host_queue_.host_chan_.thread_pool_->schedule_impl(&resume_coroutine); // bug? what if schedule_operation out of bound
+				//cppcoro::static_thread_pool::schedule_operation resume_coroutine(host_queue_.host_chan_.thread_pool_, host_queue_.wait_list_.front().awaiter);
+				cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
+					host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_,
+							host_queue_.wait_list_.front().awaiter);
+				host_queue_.host_chan_.thread_pool_->schedule_impl(resume_coroutine); // bug? what if schedule_operation out of bound
 		
 				host_queue_.wait_list_.pop_front();
 				// final version : only setting it runnable is enough
@@ -224,8 +227,12 @@ public:
 			//if (!host_queue_.wait_list_.empty() && host_queue_.host_chan_.has_pending_data()) {
 			if (resume_one_ && !host_queue_.wait_list_.empty()) {
 				// add into thread pool
-				cppcoro::static_thread_pool::schedule_operation resume_coroutine(host_queue_.host_chan_.thread_pool_, host_queue_.wait_list_.front().awaiter);
-				host_queue_.host_chan_.thread_pool_->schedule_impl(&resume_coroutine); // bug? what if schedule_operation out of bound
+				//cppcoro::static_thread_pool::schedule_operation resume_coroutine(host_queue_.host_chan_.thread_pool_, host_queue_.wait_list_.front().awaiter);
+				
+				cppcoro::static_thread_pool::schedule_operation* resume_coroutine = 
+					host_queue_.host_chan_.get_sched_op(host_queue_.host_chan_.thread_pool_, 
+							host_queue_.wait_list_.front().awaiter);
+				host_queue_.host_chan_.thread_pool_->schedule_impl(resume_coroutine); // bug? what if schedule_operation out of bound
 		
 				host_queue_.wait_list_.pop_front();
 				// final version : only setting it runnable is enough
@@ -291,6 +298,8 @@ class AsyncChannel {
 public:
 	template <typename T_> friend class SendWaitQueue;
 	template <typename T_> friend class RecvWaitQueue;
+	
+	using sched_op = cppcoro::static_thread_pool::schedule_operation*;
 
 	AsyncChannel(int size, cppcoro::static_thread_pool* p) : chan_(size + 1), size_(size), head_(0), tail_(0),
 								data_cnt_(0), starve_cnt_(size), send_wait_queue_(*this),
@@ -300,6 +309,8 @@ public:
 	AsyncChannel(AsyncChannel<T>&&) = delete;
 	AsyncChannel& operator=(const AsyncChannel<T>&) = delete;
 	AsyncChannel& operator=(AsyncChannel<T>&&) = delete;
+
+	
 
 	size_t size() {
 		return (tail_ + size_ - head_) % (size_ + 1);
@@ -428,6 +439,13 @@ public:
 		return cv_empty;
 	}
 
+	sched_op get_sched_op(cppcoro::static_thread_pool* tp, std::experimental::coroutine_handle<> awaiter) noexcept {
+		sched_op p = new cppcoro::static_thread_pool::schedule_operation(tp, awaiter);
+		sched_ops_.push_back(p);
+		return p;
+	}
+	
+
 private:
 	cppcoro::static_thread_pool* thread_pool_;
 	std::vector<T> chan_;
@@ -448,6 +466,7 @@ private:
 	SendWaitQueue<T> send_wait_queue_;
 	RecvWaitQueue<T> recv_wait_queue_;
 
+	std::vector<sched_op> sched_ops_;
 
 	// must be called with lock held
 	void _inc_tail() {
