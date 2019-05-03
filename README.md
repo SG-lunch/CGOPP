@@ -14,3 +14,6 @@ files:
 
 compile :
 	clang++ -std=c++17 -fcoroutines-ts target.cpp -stdlib=libc++ -L/path-to-lib/cppcoro/build/linux_x64_clang9.0.0_optimised/lib -I/path-to-include/cppcoro/include -lcppcoro -lpthread
+
+source :
+	ThreadPool.h is from https://github.com/progschj/ThreadPool/
