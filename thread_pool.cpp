@@ -5,9 +5,10 @@
 #include <cppcoro/schedule_on.hpp>
 
 #include <iostream>
-//#include "async_channel.hpp"
-#include "async_channel_both_data_dog.hpp"
 #include <vector>
+//#include "async_channel_both_data_dog_optimised.hpp"
+#include "async_channel_both_data_dog.hpp"
+#include "measure.h"
 
 
 /*
@@ -16,10 +17,11 @@
 
 
 int main() {
-//	cppcoro::static_thread_pool thread_pool{2};
-	cppcoro::static_thread_pool thread_pool;
+	cppcoro::static_thread_pool thread_pool{4};
+	//cppcoro::static_thread_pool thread_pool;
 	AsyncChannel<int> chan(10, &thread_pool);	
 	std::mutex display_mutex;
+	const int test_iter = 1;
 
 	auto makeTask = [&]() -> cppcoro::task<> {
 		std::unique_lock<std::mutex> lck(display_mutex);
@@ -62,26 +64,31 @@ int main() {
 		lck.unlock();
 	};
 
-	std::vector<cppcoro::task<>> tasks;
-	for (int i = 0; i < 100; ++i) {
-		//tasks.push_back(makeTask());
-		//tasks.push_back(MakeProducer(i));
-		//tasks.push_back(MakeConsumer(i));
-		
-		tasks.push_back(MakeConsumer(i));
-		tasks.push_back(MakeProducer(i));
-	}
-
-/*	
-	for (int i = 0; i < 100; ++i) {
-		//tasks.push_back(makeTask());
-		//tasks.push_back(MakeProducer(i));
-		tasks.push_back(MakeConsumer(i));
-	}
-	*/
 	
+	Measure m1;	
+	//for (int k = 0; k < test_iter; ++k) {
+		std::vector<cppcoro::task<>> tasks;
+		for (int i = 0; i < 100; ++i) {
+			//tasks.push_back(makeTask());
+			//tasks.push_back(MakeProducer(i));
+			//tasks.push_back(MakeConsumer(i));
+			
+			tasks.push_back(MakeConsumer(i));
+			tasks.push_back(MakeProducer(i));
+		}
 
-	cppcoro::sync_wait(cppcoro::when_all(std::move(tasks)));
+	/*	
+		for (int i = 0; i < 100; ++i) {
+			//tasks.push_back(makeTask());
+			tasks.push_back(MakeProducer(i));
+			//tasks.push_back(MakeConsumer(i));
+		}	
+		*/
 
+		cppcoro::sync_wait(cppcoro::when_all(std::move(tasks)));
+	//}
+	Measure m2;
+
+	std::cout << m2.diff_time_millisec(m1).count() / test_iter << "msec\n";
 	return 0;
 }
