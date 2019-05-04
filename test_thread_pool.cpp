@@ -15,7 +15,14 @@
  */
 
 
-int main() {
+int main(int argc, char *argv[])
+{
+	int numTask = 10;
+	if(argc > 1)
+		numTask = atoi(argv[1]);
+	else
+		std::cout << "You can pass in a command line argument as the number of producers/consumers to generate. Default to 10.\n";
+	
 	//cppcoro::static_thread_pool thread_pool{4};
 	cppcoro::static_thread_pool thread_pool;
 	AsyncChannel<int> chan(10, &thread_pool);	
@@ -67,7 +74,7 @@ int main() {
 	//for (int k = 0; k < test_iter; ++k) {
 	//	std::cout << "[ITER] " << k << " iter\n";
 		std::vector<cppcoro::task<>> tasks;
-		for (int i = 0; i < 100; ++i) {
+		for (int i = 0; i < numTask; ++i) {
 			//tasks.push_back(makeTask());
 			//tasks.push_back(MakeProducer(i));
 			//tasks.push_back(MakeConsumer(i));
