@@ -331,8 +331,7 @@ public:
 
 	AsyncChannel(int size, cppcoro::static_thread_pool* p) : chan_(size + 1), size_(size), head_(0), tail_(0),
 								data_cnt_(0), starve_cnt_(size), send_wait_queue_(*this),
-								recv_wait_queue_(*this), full_event_(true), empty_event_(false),
-								thread_pool_(p) {}
+								recv_wait_queue_(*this), thread_pool_(p) {}
 	AsyncChannel(const AsyncChannel<T>&) = delete;
 	AsyncChannel(AsyncChannel<T>&&) = delete;
 	AsyncChannel& operator=(const AsyncChannel<T>&) = delete;

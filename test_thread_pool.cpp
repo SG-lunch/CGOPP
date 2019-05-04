@@ -67,7 +67,7 @@ int main() {
 	//for (int k = 0; k < test_iter; ++k) {
 	//	std::cout << "[ITER] " << k << " iter\n";
 		std::vector<cppcoro::task<>> tasks;
-		for (int i = 0; i < 10000; ++i) {
+		for (int i = 0; i < 100; ++i) {
 			//tasks.push_back(makeTask());
 			//tasks.push_back(MakeProducer(i));
 			//tasks.push_back(MakeConsumer(i));
