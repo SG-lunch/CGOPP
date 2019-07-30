@@ -1,7 +1,7 @@
 # CGOPP
 ##We implemented async channel in cpp based on coroutine.
 files:
-1. async\_channel\_both\_data\_dog.hpp is our main header file.
+1. async\_channel.hpp is our main header file.
 	
 2. test\_thread\_pool.cpp is a sample test file.
 	
